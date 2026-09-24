@@ -68,25 +68,12 @@ export function getTelegramUser(): TelegramUser {
     return window.Telegram.WebApp.initDataUnsafe.user;
   }
 
-  // Fallback to local storage or default user (Admin from bot config or Demo)
-  const saved = localStorage.getItem('spindbet_mock_user');
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch {}
-  }
-
+  // Fallback to real owner ID from bot configuration when previewing outside Telegram
   return {
     id: 7505000952,
     username: 'winer404',
     first_name: 'Admin',
   };
-}
-
-export function setCustomUser(user: TelegramUser) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('spindbet_mock_user', JSON.stringify(user));
-  }
 }
 
 export function triggerHaptic(type: 'light' | 'medium' | 'heavy' | 'success' | 'error' | 'warning' | 'selection') {
@@ -116,5 +103,10 @@ export function openExternalUrl(url: string) {
       return;
     }
   }
-  window.open(url, '_blank');
+  // Safe navigation fallback without window.open
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.click();
 }

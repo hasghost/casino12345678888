@@ -1,16 +1,14 @@
 import React from 'react';
-import { User, ShieldCheck, Gamepad2, Award, DollarSign, Calendar, MessageCircle, Send, ExternalLink } from 'lucide-react';
+import { Gamepad2, Award, DollarSign, ShieldCheck, MessageCircle, ExternalLink } from 'lucide-react';
 import { openExternalUrl } from '../utils/telegram.ts';
 
 interface ProfileTabProps {
   user: any;
   onOpenWallet: () => void;
-  onOpenBotInfo: () => void;
 }
 
-export const ProfileTab: React.FC<ProfileTabProps> = ({ user, onOpenWallet, onOpenBotInfo }) => {
+export const ProfileTab: React.FC<ProfileTabProps> = ({ user, onOpenWallet }) => {
   const balance = Number(user?.balance || 0);
-  const refBalance = Number(user?.referral_balance || 0);
   const totalGames = Number(user?.total_games || 0);
   const totalWins = Number(user?.total_wins || 0);
   const totalBets = Number(user?.total_bets_amount || 0);
@@ -80,29 +78,10 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({ user, onOpenWallet, onOp
       </div>
 
       {/* Action links */}
-      <div className="bg-[#121826] border border-slate-800 rounded-2xl divide-y divide-slate-800/80 overflow-hidden shadow-xl text-xs font-bold">
-        <button
-          onClick={onOpenWallet}
-          className="w-full p-3.5 flex items-center justify-between text-slate-200 hover:text-white hover:bg-slate-850 transition-colors"
-        >
-          <span>Управление балансом и выводами</span>
-          <span className="text-amber-400 font-black">${balance.toFixed(2)} →</span>
-        </button>
-
-        <button
-          onClick={onOpenBotInfo}
-          className="w-full p-3.5 flex items-center justify-between text-slate-200 hover:text-white hover:bg-slate-850 transition-colors"
-        >
-          <span className="flex items-center gap-2">
-            <Send size={14} className="text-amber-400" />
-            <span>Как подключить Mini App к боту</span>
-          </span>
-          <span className="text-slate-500">Инструкция →</span>
-        </button>
-
+      <div className="bg-[#121826] border border-slate-800 rounded-2xl overflow-hidden shadow-xl text-xs font-bold">
         <button
           onClick={() => openExternalUrl('https://t.me/winer404')}
-          className="w-full p-3.5 flex items-center justify-between text-slate-200 hover:text-white hover:bg-slate-850 transition-colors"
+          className="w-full p-3.5 flex items-center justify-between text-slate-200 hover:text-white hover:bg-slate-800/60 transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2">
             <MessageCircle size={14} className="text-emerald-400" />

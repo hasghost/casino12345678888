@@ -43,7 +43,18 @@
   animation: pulse-glow 2s infinite ease-in-out;
 }
 
-/* Hide scrollbars but keep scrolling */
+/* Hide scrollbars globally across all browsers to eliminate white track/slider */
+html, body, * {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+html::-webkit-scrollbar, body::-webkit-scrollbar, *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }

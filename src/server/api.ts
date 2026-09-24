@@ -30,6 +30,9 @@ export function registerApiRoutes(app: any) {
         ok: true,
         user: {
           ...user,
+          balance: Math.round(Number(user.balance || 0) * 100) / 100,
+          referral_balance: Math.round(Number(user.referral_balance || 0) * 100) / 100,
+          total_bets_amount: Math.round(Number(user.total_bets_amount || 0) * 100) / 100,
           winrate,
         },
       });
@@ -39,29 +42,7 @@ export function registerApiRoutes(app: any) {
     }
   });
 
-  // 2. Presets for easy testing in browser preview
-  app.get('/api/users/presets', async (req: Request, res: Response) => {
-    try {
-      const db = await getDb();
-      const resStmt = db.exec(`SELECT user_id, username, balance, total_games, total_wins FROM users ORDER BY is_admin DESC, balance DESC LIMIT 10`);
-      const presets: any[] = [];
-      if (resStmt.length && resStmt[0].values.length) {
-        const columns = resStmt[0].columns;
-        for (const row of resStmt[0].values) {
-          const obj: any = {};
-          columns.forEach((col, idx) => {
-            obj[col] = row[idx];
-          });
-          presets.push(obj);
-        }
-      }
-      return res.json({ ok: true, presets });
-    } catch (err: any) {
-      return res.status(500).json({ ok: false, error: err.message });
-    }
-  });
-
-  // 3. Active Mines Game
+  // 2. Active Mines Game
   app.get('/api/mines/active', async (req: Request, res: Response) => {
     try {
       const db = await getDb();
@@ -153,9 +134,9 @@ export function registerApiRoutes(app: any) {
       const nowTs = Math.floor(Date.now() / 1000);
       db.run(`
         INSERT INTO provably_fair_rounds
-        (user_id, game_name, bet_amount, server_seed_hash, client_seed, nonce, timestamp, status)
-        VALUES (?, 'Mines', ?, ?, ?, ?, ?, 'pending')
-      `, [userId, bet, server_seed_hash, client_seed, nonce, nowTs]);
+        (user_id, game_name, bet_amount, server_seed_hash, server_seed, client_seed, nonce, timestamp, status)
+        VALUES (?, 'Mines', ?, ?, ?, ?, ?, ?, 'pending')
+      `, [userId, bet, server_seed_hash, server_seed, client_seed, nonce, nowTs]);
 
       const roundRes = db.exec(`SELECT last_insert_rowid() as id`);
       const roundId = roundRes[0].values[0][0];
@@ -572,5 +553,178 @@ export function registerApiRoutes(app: any) {
         chatUrl: 'https://t.me/+uNALN45BYs9hNmYy',
       },
     });
+  });
+
+  // 11. Roulette History
+  const RED_SET = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+  const BLACK_SET = new Set([2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35]);
+
+  const getNumberColor = (num: number): 'green' | 'red' | 'black' => {
+    if (num === 0) return 'green';
+    if (RED_SET.has(num)) return 'red';
+    return 'black';
+  };
+
+  app.get('/api/roulette/history', async (_req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const stmt = db.prepare(`
+        SELECT result, timestamp FROM provably_fair_rounds 
+        WHERE game_name = 'Roulette' AND status = 'revealed'
+        ORDER BY id DESC LIMIT 15
+      `);
+      const history: Array<{ number: number; color: string }> = [];
+      while (stmt.step()) {
+        const row = stmt.getAsObject();
+        try {
+          const parsed = JSON.parse(String(row.result));
+          if (typeof parsed.number === 'number') {
+            history.push({
+              number: parsed.number,
+              color: parsed.color || getNumberColor(parsed.number),
+            });
+          }
+        } catch {
+          // ignore parsing error
+        }
+      }
+      stmt.free();
+
+      // If empty, provide default seed history
+      if (history.length === 0) {
+        const defaults = [14, 2, 0, 19, 32, 7, 26, 11, 35, 17];
+        defaults.forEach(num => history.push({ number: num, color: getNumberColor(num) }));
+      }
+
+      return res.json({ ok: true, history });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // 12. Roulette Spin
+  app.post('/api/roulette/spin', async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const { userId, bets } = req.body;
+
+      if (!userId) return res.status(400).json({ ok: false, error: 'User ID is required' });
+      if (!bets || typeof bets !== 'object' || Object.keys(bets).length === 0) {
+        return res.status(400).json({ ok: false, error: 'Сделайте хотя бы одну ставку' });
+      }
+
+      const user = getUser(db, Number(userId));
+      if (user.is_banned) {
+        return res.status(403).json({ ok: false, error: 'Вы заблокированы в системе' });
+      }
+
+      // Calculate total bet
+      let totalBet = 0;
+      for (const amount of Object.values(bets)) {
+        const num = Number(amount) || 0;
+        if (num > 0) totalBet += num;
+      }
+      totalBet = Math.round(totalBet * 100) / 100;
+
+      if (totalBet < 0.01) {
+        return res.status(400).json({ ok: false, error: 'Минимальная ставка $0.01' });
+      }
+      if (totalBet > 500) {
+        return res.status(400).json({ ok: false, error: 'Максимальная сумма ставок $500' });
+      }
+      if ((user.balance || 0) < totalBet) {
+        return res.status(400).json({ ok: false, error: 'Недостаточно средств на балансе' });
+      }
+
+      // Deduct balance
+      updateUserBalance(db, Number(userId), -totalBet);
+
+      // Provably Fair Calculation (Standard European Roulette SHA-256 HMAC)
+      const nonce = getNextNonce(db, Number(userId));
+      const { server_seed, client_seed, server_seed_hash } = generateSeeds();
+      const hmac = crypto.createHmac('sha256', server_seed);
+      hmac.update(`${client_seed}:${nonce}`);
+      const hash = hmac.digest('hex');
+      const winningNumber = parseInt(hash.substring(0, 8), 16) % 37; // 0 to 36
+      const winningColor = getNumberColor(winningNumber);
+
+      // Calculate winnings
+      let totalWin = 0;
+      for (const [key, amount] of Object.entries(bets)) {
+        const betAmt = Number(amount) || 0;
+        if (betAmt <= 0) continue;
+
+        if (key === 'red' && winningColor === 'red') totalWin += betAmt * 2;
+        else if (key === 'black' && winningColor === 'black') totalWin += betAmt * 2;
+        else if (key === 'green' && winningNumber === 0) totalWin += betAmt * 14;
+        else if (key === 'low' && winningNumber >= 1 && winningNumber <= 18) totalWin += betAmt * 2;
+        else if (key === 'high' && winningNumber >= 19 && winningNumber <= 36) totalWin += betAmt * 2;
+        else if (key === 'even' && winningNumber > 0 && winningNumber % 2 === 0) totalWin += betAmt * 2;
+        else if (key === 'odd' && winningNumber > 0 && winningNumber % 2 === 1) totalWin += betAmt * 2;
+        else if (key === 'dozen1' && winningNumber >= 1 && winningNumber <= 12) totalWin += betAmt * 3;
+        else if (key === 'dozen2' && winningNumber >= 13 && winningNumber <= 24) totalWin += betAmt * 3;
+        else if (key === 'dozen3' && winningNumber >= 25 && winningNumber <= 36) totalWin += betAmt * 3;
+        else if (key.startsWith('num_')) {
+          const directNum = parseInt(key.replace('num_', ''), 10);
+          if (directNum === winningNumber) totalWin += betAmt * 36;
+        }
+      }
+      totalWin = Math.round(totalWin * 100) / 100;
+
+      // Credit winnings
+      if (totalWin > 0) {
+        updateUserBalance(db, Number(userId), totalWin);
+      }
+
+      // Update user stats
+      const isWin = totalWin > totalBet;
+      updateUserGameStats(db, Number(userId), totalBet, isWin);
+
+      // Record round in provably_fair_rounds
+      const nowTs = Math.floor(Date.now() / 1000);
+      const resultObj = {
+        number: winningNumber,
+        color: winningColor,
+        totalBet,
+        totalWin,
+        win: totalWin > 0,
+      };
+
+      db.run(`
+        INSERT INTO provably_fair_rounds
+        (user_id, game_name, bet_amount, result, server_seed_hash, server_seed, client_seed, nonce, timestamp, status)
+        VALUES (?, 'Roulette', ?, ?, ?, ?, ?, ?, ?, 'revealed')
+      `, [
+        Number(userId),
+        totalBet,
+        JSON.stringify(resultObj),
+        server_seed_hash,
+        server_seed,
+        client_seed,
+        nonce,
+        nowTs,
+      ]);
+
+      saveDb();
+      const freshUser = getUser(db, Number(userId));
+
+      return res.json({
+        ok: true,
+        winningNumber,
+        color: winningColor,
+        totalBet,
+        totalWin,
+        balance: freshUser.balance,
+        fairness: {
+          serverSeed: server_seed,
+          serverSeedHash: server_seed_hash,
+          clientSeed: client_seed,
+          nonce,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error in /api/roulette/spin:', err);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
   });
 }

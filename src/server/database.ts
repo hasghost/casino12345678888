@@ -153,18 +153,6 @@ function initDatabaseTables(database: Database) {
     `);
   }
 
-  // Ensure default demo user exists for browser testing
-  const demoId = 9990001;
-  const demoRes = database.exec(`SELECT user_id FROM users WHERE user_id = ${demoId}`);
-  if (!demoRes.length || !demoRes[0].values.length) {
-    const nowStr = new Date().toLocaleDateString('ru-RU');
-    const nowTs = Math.floor(Date.now() / 1000);
-    database.run(`
-      INSERT INTO users (user_id, username, balance, registration_date, is_admin, is_banned, reg_timestamp)
-      VALUES (${demoId}, 'demo_player', 25.0, '${nowStr}', 0, 0, ${nowTs});
-    `);
-  }
-
   const stats = ['total_deposits', 'total_withdrawals', 'total_referral_payouts', 'total_paid_out', 'total_players'];
   for (const s of stats) {
     database.run(`INSERT OR IGNORE INTO stats (key, value) VALUES ('${s}', 0)`);
@@ -207,7 +195,7 @@ export function getUser(database: Database, userId: number, username: string = '
 }
 
 export function updateUserBalance(database: Database, userId: number, amount: number) {
-  database.run(`UPDATE users SET balance = balance + ? WHERE user_id = ?`, [amount, userId]);
+  database.run(`UPDATE users SET balance = ROUND(balance + ?, 2) WHERE user_id = ?`, [amount, userId]);
   saveDb();
 }
 
@@ -215,7 +203,7 @@ export function updateUserGameStats(database: Database, userId: number, betAmoun
   database.run(`
     UPDATE users SET 
       total_games = total_games + 1, 
-      total_bets_amount = total_bets_amount + ?,
+      total_bets_amount = ROUND(total_bets_amount + ?, 2),
       total_wins = total_wins + ?
     WHERE user_id = ?
   `, [betAmount, win ? 1 : 0, userId]);

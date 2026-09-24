@@ -5,12 +5,7 @@ import {
   Sparkles,
   ShieldCheck,
   Dices,
-  RotateCcw,
-  CheckCircle2,
   AlertTriangle,
-  Info,
-  ChevronRight,
-  TrendingUp,
 } from 'lucide-react';
 import { playClickSound, playGemSound, playBombSound, playCashoutSound } from '../utils/sound.ts';
 import { triggerHaptic } from '../utils/telegram.ts';
@@ -33,7 +28,7 @@ interface ActiveGameState {
 }
 
 const MINES_OPTIONS = [1, 2, 3, 5, 10, 15, 20, 24];
-const QUICK_BETS = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0];
+const QUICK_BETS = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0];
 
 export const MinesGame: React.FC<MinesGameProps> = ({
   userId,
@@ -42,7 +37,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
   onOpenFairness,
 }) => {
   const [betAmount, setBetAmount] = useState<number>(0.5);
-  const [minesCount, setMinesCount] = useState<number>(10); // Default in bot
+  const [minesCount, setMinesCount] = useState<number>(5);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [activeGame, setActiveGame] = useState<ActiveGameState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -83,11 +78,12 @@ export const MinesGame: React.FC<MinesGameProps> = ({
   };
 
   const handleStartGame = async () => {
-    if (betAmount < 0.01) {
+    const cleanBet = Math.round(betAmount * 100) / 100;
+    if (cleanBet < 0.01) {
       setErrorMsg('Минимальная ставка $0.01');
       return;
     }
-    if (betAmount > balance) {
+    if (cleanBet > balance) {
       setErrorMsg('Недостаточно средств на балансе!');
       return;
     }
@@ -106,7 +102,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          betAmount,
+          betAmount: cleanBet,
           minesCount,
         }),
       });
@@ -125,7 +121,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
       setFairnessData(data.fairness);
       onBalanceChange(data.balance);
     } catch (err: any) {
-      setErrorMsg('Сетевая ошибка сервера');
+      setErrorMsg('Сетевая ошибка соединения');
     } finally {
       setLoading(false);
     }
@@ -160,7 +156,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({
         setIsPlaying(false);
         setRevealedMines(data.mines);
         setLastHitCell(cellId);
-        setActiveGame((prev) => (prev ? { ...prev, opened: data.opened } : null));
+        // Remove the hit cell from opened so it shows as explosion, not crystal
+        const gemsOpened = (data.opened || []).filter((idx: number) => idx !== cellId);
+        setActiveGame((prev) => (prev ? { ...prev, opened: gemsOpened } : null));
         onBalanceChange(data.balance);
         setFairnessData(data.fairness);
         return;
@@ -245,7 +243,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
   };
 
   const handleRandomPick = () => {
-    if (!isPlaying || !activeGame) return;
+    if (!isPlaying || !activeGame || loading) return;
     const unopened: number[] = [];
     for (let i = 0; i < 25; i++) {
       if (!activeGame.opened.includes(i)) {
@@ -260,7 +258,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({
 
   const openedCount = activeGame?.opened?.length || 0;
   const currentMultiplier = activeGame?.currentMultiplier || 1.0;
-  const nextMultiplier = activeGame?.nextMultiplier || calculateMinesMultiplier(minesCount, openedCount + 1);
   const potentialWin = Math.round(betAmount * currentMultiplier * 100) / 100;
   const safeRemaining = 25 - minesCount - openedCount;
 
@@ -274,6 +271,18 @@ export const MinesGame: React.FC<MinesGameProps> = ({
     });
   }
 
+  const handleSelectMines = (count: number) => {
+    triggerHaptic('selection');
+    playClickSound();
+    setMinesCount(count);
+    // Clear past round results so field resets nicely
+    if (!isPlaying) {
+      setRevealedMines(null);
+      setLastHitCell(null);
+      setLastWinInfo(null);
+    }
+  };
+
   return (
     <div className="max-w-xl mx-auto px-3.5 py-4 space-y-4">
       {/* Top Banner & Multiplier Roadmap */}
@@ -285,16 +294,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-black text-white leading-none flex items-center gap-1.5">
-                МИНЫ <span className="text-amber-400">SPINDBET</span>
+                МИНЫ
               </h2>
-              <span className="text-[10px] text-slate-400">5×5 Поле • Выбор от 1 до 24 мин</span>
+              <span className="text-[10px] text-slate-400">5×5 Поле • От 1 до 24 мин</span>
             </div>
           </div>
 
           {/* Provably Fair Badge */}
           <button
             onClick={() => onOpenFairness(fairnessData)}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-750 border border-slate-700/80 text-[11px] text-slate-300 hover:text-white transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-750 border border-slate-700/80 text-[11px] text-slate-300 hover:text-white transition-colors cursor-pointer"
           >
             <ShieldCheck size={13} className="text-emerald-400" />
             <span className="font-semibold">Fairness</span>
@@ -319,7 +328,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                 }`}
               >
                 <div className="text-[9px] uppercase tracking-wider text-slate-400 leading-none">
-                  {step.step} {step.step === 1 ? 'шаг' : 'шаг'}
+                  {step.step} шаг
                 </div>
                 <div className="text-xs font-bold mt-0.5 leading-none">x{step.mult.toFixed(2)}</div>
               </div>
@@ -345,7 +354,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
           </div>
           <button
             onClick={() => setLastWinInfo(null)}
-            className="text-xs text-slate-400 hover:text-white px-2 py-1"
+            className="text-xs text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
           >
             ✕
           </button>
@@ -383,58 +392,60 @@ export const MinesGame: React.FC<MinesGameProps> = ({
         {/* 5x5 Grid */}
         <div className="grid grid-cols-5 gap-2 sm:gap-2.5 aspect-square">
           {Array.from({ length: 25 }, (_, idx) => {
+            const isLastHit = lastHitCell === idx;
             const isOpened = activeGame?.opened?.includes(idx);
             const isMine = revealedMines?.includes(idx);
-            const isLastHit = lastHitCell === idx;
 
-            // Tile styling
+            // Tile styling: strict priority of states
             let cellContent = null;
             let cellClass =
-              'relative rounded-xl flex items-center justify-center font-black transition-all duration-200 select-none shadow-md overflow-hidden cursor-pointer ';
+              'relative rounded-xl flex items-center justify-center font-black transition-all duration-200 select-none shadow-md overflow-hidden ';
 
-            if (isOpened) {
-              // Opened Gem
-              cellClass += 'bg-gradient-to-b from-sky-400 via-blue-600 to-indigo-700 text-white shadow-lg shadow-blue-500/30 border border-blue-300/40';
+            if (isLastHit) {
+              // 1. The exact mine player hit: Explosion!
+              cellClass +=
+                'bg-gradient-to-b from-red-500 via-rose-600 to-red-900 text-white shadow-xl shadow-red-500/60 border-2 border-red-300 scale-105';
               cellContent = (
-                <div className="flex flex-col items-center justify-center animate-gem">
-                  <span className="text-2xl sm:text-3xl filter drop-shadow">💎</span>
-                </div>
-              );
-            } else if (isLastHit) {
-              // The exact mine player hit
-              cellClass += 'bg-gradient-to-b from-red-500 via-red-600 to-rose-800 text-white shadow-xl shadow-red-500/50 border-2 border-red-300 animate-bomb';
-              cellContent = (
-                <div className="flex flex-col items-center justify-center">
+                <div className="flex flex-col items-center justify-center animate-bounce">
                   <span className="text-2xl sm:text-3xl">💥</span>
                 </div>
               );
+            } else if (isOpened) {
+              // 2. Opened safe gem by player
+              cellClass +=
+                'bg-gradient-to-b from-sky-400 via-blue-600 to-indigo-700 text-white shadow-lg shadow-blue-500/30 border border-blue-300/40';
+              cellContent = (
+                <div className="flex flex-col items-center justify-center animate-pulse">
+                  <span className="text-2xl sm:text-3xl filter drop-shadow">💎</span>
+                </div>
+              );
             } else if (revealedMines && isMine) {
-              // Revealed remaining mine after defeat
-              cellClass += 'bg-slate-800/80 border border-red-500/30 text-red-400 opacity-75';
+              // 3. Unopened mine revealed after defeat
+              cellClass += 'bg-slate-900/90 border border-red-500/40 text-red-400 opacity-80';
               cellContent = <span className="text-xl sm:text-2xl opacity-90">💣</span>;
             } else if (revealedMines && !isMine) {
-              // Revealed remaining safe tile after defeat
-              cellClass += 'bg-slate-800/60 border border-emerald-500/20 text-emerald-400 opacity-60';
+              // 4. Unopened safe tile revealed after defeat
+              cellClass += 'bg-slate-900/60 border border-emerald-500/20 text-emerald-400 opacity-50';
               cellContent = <span className="text-lg opacity-60">💎</span>;
             } else {
-              // Unopened tile ready to click
+              // 5. Unopened tile during active game or idle
               if (isPlaying) {
                 cellClass +=
-                  'bg-gradient-to-b from-slate-700/80 via-slate-800/90 to-slate-900 border border-slate-600/50 hover:border-amber-400/80 hover:from-slate-700 hover:to-slate-800 active:scale-95 hover:shadow-lg hover:shadow-amber-500/20';
+                  'bg-gradient-to-b from-slate-700/80 via-slate-800/90 to-slate-900 border border-slate-600/50 hover:border-amber-400/80 hover:from-slate-700 hover:to-slate-800 active:scale-95 hover:shadow-lg hover:shadow-amber-500/20 cursor-pointer';
                 cellContent = (
-                  <div className="w-2.5 h-2.5 rounded-full bg-slate-600/50 group-hover:bg-amber-400/50 transition-colors"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-slate-600/60 group-hover:bg-amber-400 transition-colors"></div>
                 );
               } else {
                 cellClass +=
-                  'bg-gradient-to-b from-slate-800/60 via-slate-850 to-slate-900/90 border border-slate-700/40 opacity-90';
-                cellContent = <div className="w-2 h-2 rounded-full bg-slate-700/50"></div>;
+                  'bg-gradient-to-b from-slate-850 via-slate-900 to-slate-950 border border-slate-800 text-slate-600';
+                cellContent = <div className="w-2 h-2 rounded-full bg-slate-800"></div>;
               }
             }
 
             return (
               <button
                 key={idx}
-                disabled={!isPlaying || loading || isOpened}
+                disabled={!isPlaying || loading || Boolean(isOpened) || Boolean(isLastHit)}
                 onClick={() => handleCellClick(idx)}
                 className={cellClass}
               >
@@ -455,7 +466,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
               onClick={handleCashout}
               className={`w-full py-4 px-4 rounded-2xl font-black text-base uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl ${
                 openedCount > 0
-                  ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 shadow-amber-500/30 hover:brightness-110 active:scale-[0.99] pulse-glow-amber cursor-pointer'
+                  ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 text-slate-950 shadow-amber-500/30 hover:brightness-110 active:scale-[0.99] cursor-pointer'
                   : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
               }`}
             >
@@ -475,7 +486,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
               <button
                 disabled={loading}
                 onClick={handleRandomPick}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-750 border border-slate-700 text-xs font-bold text-slate-200 hover:text-white flex items-center justify-center gap-1.5 transition-colors"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-750 border border-slate-700 text-xs font-bold text-slate-200 hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Dices size={15} className="text-amber-400" />
                 <span>Случайный выбор</span>
@@ -502,12 +513,8 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                 {MINES_OPTIONS.map((count) => (
                   <button
                     key={count}
-                    onClick={() => {
-                      triggerHaptic('selection');
-                      playClickSound();
-                      setMinesCount(count);
-                    }}
-                    className={`py-1.5 text-xs font-black rounded-xl transition-all ${
+                    onClick={() => handleSelectMines(count)}
+                    className={`py-1.5 text-xs font-black rounded-xl transition-all cursor-pointer ${
                       minesCount === count
                         ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 scale-[1.03]'
                         : 'bg-slate-800/90 hover:bg-slate-750 text-slate-300 border border-slate-700/60'
@@ -535,7 +542,10 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                   min="0.01"
                   max="500"
                   value={betAmount || ''}
-                  onChange={(e) => setBetAmount(Math.max(0, parseFloat(e.target.value) || 0))}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value) || 0;
+                    setBetAmount(Math.round(val * 100) / 100);
+                  }}
                   className="w-full bg-slate-900 border border-slate-700/80 rounded-xl py-2.5 pl-8 pr-28 text-white font-extrabold text-sm focus:outline-none focus:border-amber-500 transition-colors shadow-inner"
                 />
                 <div className="absolute right-1.5 flex gap-1">
@@ -544,7 +554,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                       triggerHaptic('light');
                       setBetAmount((prev) => Math.max(0.01, Math.round((prev / 2) * 100) / 100));
                     }}
-                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-[10px] font-bold text-slate-300 hover:text-white border border-slate-700"
+                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-[10px] font-bold text-slate-300 hover:text-white border border-slate-700 cursor-pointer"
                   >
                     ½
                   </button>
@@ -553,16 +563,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                       triggerHaptic('light');
                       setBetAmount((prev) => Math.min(500, Math.round(prev * 2 * 100) / 100));
                     }}
-                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-[10px] font-bold text-slate-300 hover:text-white border border-slate-700"
+                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-[10px] font-bold text-slate-300 hover:text-white border border-slate-700 cursor-pointer"
                   >
                     2X
                   </button>
                   <button
                     onClick={() => {
                       triggerHaptic('light');
-                      setBetAmount(Math.min(500, Math.max(0.01, balance)));
+                      setBetAmount(Math.min(500, Math.max(0.01, Math.floor(balance * 100) / 100)));
                     }}
-                    className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-[10px] font-black text-amber-300 border border-amber-500/40"
+                    className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-[10px] font-black text-amber-300 border border-amber-500/40 cursor-pointer"
                   >
                     MAX
                   </button>
@@ -579,13 +589,13 @@ export const MinesGame: React.FC<MinesGameProps> = ({
                       playClickSound();
                       setBetAmount(chip);
                     }}
-                    className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-colors ${
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                       betAmount === chip
                         ? 'bg-amber-500/30 text-amber-300 border border-amber-500/60'
                         : 'bg-slate-800/60 hover:bg-slate-800 text-slate-400 border border-slate-700/50'
                     }`}
                   >
-                    ${chip >= 1 ? chip : chip.toFixed(2)}
+                    ${chip >= 1 ? chip : chip.toFixed(1)}
                   </button>
                 ))}
               </div>
@@ -602,21 +612,6 @@ export const MinesGame: React.FC<MinesGameProps> = ({
             </button>
           </div>
         )}
-      </div>
-
-      {/* FOOTER INFO: Bot Rules & Provably Fair Note */}
-      <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-3 text-[11px] text-slate-400 space-y-1">
-        <div className="flex items-center justify-between text-slate-300 font-bold mb-1">
-          <span className="flex items-center gap-1.5">
-            <Info size={13} className="text-amber-400" />
-            <span>Особенности Mines SpindBet</span>
-          </span>
-          <span className="text-[10px] text-emerald-400 font-semibold">96% RTP • SHA-256</span>
-        </div>
-        <p>
-          Баланс и выигрыши в Mini App на 100% синхронизированы с ботом <b className="text-slate-200">@SPIND_BET_BOT</b>.
-          Любой заработок можно мгновенно вывести через Telegram чеки CryptoBot или СБП.
-        </p>
       </div>
     </div>
   );

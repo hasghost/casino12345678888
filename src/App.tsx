@@ -1,35 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import {
   Bomb,
-  Wallet,
+  RotateCw,
   Trophy,
   Users,
   User,
-  Sparkles,
-  Info,
-  Gift,
-  Flame,
 } from 'lucide-react';
 import { Header } from './components/Header.tsx';
 import { MinesGame } from './components/MinesGame.tsx';
+import { RouletteGame } from './components/RouletteGame.tsx';
 import { WalletModal } from './components/WalletModal.tsx';
 import { LeaderboardTab } from './components/LeaderboardTab.tsx';
 import { ReferralsTab } from './components/ReferralsTab.tsx';
 import { ProfileTab } from './components/ProfileTab.tsx';
-import { BotIntegrationModal } from './components/BotIntegrationModal.tsx';
 import { ProvablyFairModal } from './components/ProvablyFairModal.tsx';
-import { initTelegramApp, getTelegramUser, setCustomUser, triggerHaptic } from './utils/telegram.ts';
+import { initTelegramApp, getTelegramUser, triggerHaptic } from './utils/telegram.ts';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'mines' | 'wallet' | 'leaderboard' | 'referrals' | 'profile'>('mines');
+  const [currentTab, setCurrentTab] = useState<'mines' | 'roulette' | 'leaderboard' | 'referrals' | 'profile'>('mines');
   const [user, setUser] = useState<any>(null);
-  const [presets, setPresets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modals state
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [walletTab, setWalletTab] = useState<'deposit' | 'withdraw' | 'promo' | 'bonus'>('deposit');
-  const [isBotInfoOpen, setIsBotInfoOpen] = useState(false);
   const [isFairnessOpen, setIsFairnessOpen] = useState(false);
   const [fairnessData, setFairnessData] = useState<any>(null);
 
@@ -38,7 +32,6 @@ export default function App() {
     initTelegramApp();
     const tgUser = getTelegramUser();
     loadUser(tgUser.id, tgUser.username);
-    loadPresets();
   }, []);
 
   const loadUser = async (userId: number, username: string = '') => {
@@ -53,23 +46,6 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const loadPresets = async () => {
-    try {
-      const res = await fetch('/api/users/presets');
-      const data = await res.json();
-      if (data.ok) {
-        setPresets(data.presets || []);
-      }
-    } catch (err) {
-      console.error('Failed to load presets:', err);
-    }
-  };
-
-  const handleSwitchUser = (userId: number, username: string) => {
-    setCustomUser({ id: userId, username });
-    loadUser(userId, username);
   };
 
   const handleBalanceChange = (newBalance: number) => {
@@ -92,10 +68,7 @@ export default function App() {
       <Header
         user={user}
         onOpenWallet={openWalletWithTab}
-        onOpenBotInfo={() => setIsBotInfoOpen(true)}
-        onRefreshUser={() => user && loadUser(user.user_id, user.username)}
-        onSwitchUser={handleSwitchUser}
-        presets={presets}
+        onNavigateToProfile={() => setCurrentTab('profile')}
       />
 
       {/* Main Content Body */}
@@ -105,7 +78,7 @@ export default function App() {
             <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 animate-spin">
               ⚡
             </div>
-            <p className="text-xs font-bold text-slate-400">Синхронизация со SpindBet...</p>
+            <p className="text-xs font-bold text-slate-400">Загрузка данных...</p>
           </div>
         ) : (
           <>
@@ -118,16 +91,13 @@ export default function App() {
               />
             )}
 
-            {currentTab === 'wallet' && (
-              <div className="p-3">
-                <WalletModal
-                  isOpen={true}
-                  onClose={() => setCurrentTab('mines')}
-                  user={user}
-                  onBalanceChange={handleBalanceChange}
-                  initialTab="deposit"
-                />
-              </div>
+            {currentTab === 'roulette' && (
+              <RouletteGame
+                userId={user?.user_id || 7505000952}
+                balance={Number(user?.balance || 0)}
+                onBalanceChange={handleBalanceChange}
+                onOpenFairness={handleOpenFairness}
+              />
             )}
 
             {currentTab === 'leaderboard' && <LeaderboardTab />}
@@ -143,7 +113,6 @@ export default function App() {
               <ProfileTab
                 user={user}
                 onOpenWallet={() => openWalletWithTab('deposit')}
-                onOpenBotInfo={() => setIsBotInfoOpen(true)}
               />
             )}
           </>
@@ -159,7 +128,7 @@ export default function App() {
               triggerHaptic('selection');
               setCurrentTab('mines');
             }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
               currentTab === 'mines'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
@@ -171,22 +140,22 @@ export default function App() {
             <span className="text-[10px] mt-0.5 tracking-tight font-bold">Мины</span>
           </button>
 
-          {/* 2. Wallet Tab */}
+          {/* 2. Roulette Tab */}
           <button
             onClick={() => {
               triggerHaptic('selection');
-              openWalletWithTab('deposit');
+              setCurrentTab('roulette');
             }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
-              currentTab === 'wallet'
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              currentTab === 'roulette'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className={`p-1 rounded-lg ${currentTab === 'wallet' ? 'bg-amber-500/15' : ''}`}>
-              <Wallet size={20} className={currentTab === 'wallet' ? 'stroke-[2.5]' : ''} />
+            <div className={`p-1 rounded-lg ${currentTab === 'roulette' ? 'bg-amber-500/15' : ''}`}>
+              <RotateCw size={20} className={currentTab === 'roulette' ? 'stroke-[2.5]' : ''} />
             </div>
-            <span className="text-[10px] mt-0.5 tracking-tight font-bold">Касса</span>
+            <span className="text-[10px] mt-0.5 tracking-tight font-bold">Рулетка</span>
           </button>
 
           {/* 3. Leaderboard Tab */}
@@ -195,7 +164,7 @@ export default function App() {
               triggerHaptic('selection');
               setCurrentTab('leaderboard');
             }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
               currentTab === 'leaderboard'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
@@ -213,7 +182,7 @@ export default function App() {
               triggerHaptic('selection');
               setCurrentTab('referrals');
             }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
               currentTab === 'referrals'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
@@ -231,7 +200,7 @@ export default function App() {
               triggerHaptic('selection');
               setCurrentTab('profile');
             }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
               currentTab === 'profile'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
@@ -252,11 +221,6 @@ export default function App() {
         user={user}
         onBalanceChange={handleBalanceChange}
         initialTab={walletTab}
-      />
-
-      <BotIntegrationModal
-        isOpen={isBotInfoOpen}
-        onClose={() => setIsBotInfoOpen(false)}
       />
 
       <ProvablyFairModal
