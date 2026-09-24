@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { playClickSound, playGemSound, playBombSound, playCashoutSound } from '../utils/sound.ts';
 import { triggerHaptic } from '../utils/telegram.ts';
-import { calculateMinesMultiplier } from '../server/api.ts';
+import { calculateMinesMultiplier } from '../utils/minesMath.ts';
 
 interface MinesGameProps {
   userId: number;
