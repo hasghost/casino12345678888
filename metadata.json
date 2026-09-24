@@ -1,0 +1,6 @@
+{
+  "name": "SpindBet Casino Mini App",
+  "description": "Telegram Mini App для SpindBet казино с игрой Мины (Mines), синхронизацией баланса и Provably Fair.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
