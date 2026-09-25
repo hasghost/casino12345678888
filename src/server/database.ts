@@ -1,50 +1,64 @@
-import initSqlJs, { Database } from 'sql.js';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 const DB_PATH = path.resolve(process.cwd(), 'casino.db');
 
-let db: Database | null = null;
-let SQLInstance: any = null;
+let dbInstance: DatabaseSync | null = null;
 
-export async function getDb(): Promise<Database> {
-  if (db) return db;
+/**
+ * Direct file-backed SQLite database instance using Node.js native DatabaseSync.
+ * Configured with WAL mode and busy_timeout so that the external Telegram bot
+ * and this Mini App server both read and write directly to casino.db on disk
+ * without in-memory buffering, out-of-sync states, or file locks.
+ */
+export function getDb(): DatabaseSync {
+  if (dbInstance) return dbInstance;
 
-  if (!SQLInstance) {
-    SQLInstance = await initSqlJs();
-  }
+  dbInstance = new DatabaseSync(DB_PATH);
 
-  if (fs.existsSync(DB_PATH)) {
-    try {
-      const filebuffer = fs.readFileSync(DB_PATH);
-      db = new SQLInstance.Database(filebuffer);
-    } catch (e) {
-      console.error('Error reading existing casino.db, initializing new:', e);
-      db = new SQLInstance.Database();
-    }
-  } else {
-    db = new SQLInstance.Database();
-  }
+  // WAL mode allows concurrent readers and writers without database locking errors
+  dbInstance.exec('PRAGMA journal_mode = WAL;');
+  dbInstance.exec('PRAGMA busy_timeout = 5000;');
+  dbInstance.exec('PRAGMA synchronous = NORMAL;');
+  dbInstance.exec('PRAGMA foreign_keys = ON;');
 
-  initDatabaseTables(db!);
-  saveDb();
-  return db!;
+  initDatabaseTables(dbInstance);
+  return dbInstance;
 }
 
-export function saveDb() {
-  if (!db) return;
+/**
+ * Execute an atomic transaction using BEGIN IMMEDIATE to protect against
+ * concurrent writes and race conditions (double crediting, double cashout, etc.)
+ */
+export function runTransaction<T>(fn: (db: DatabaseSync) => T): T {
+  const db = getDb();
+  db.exec('BEGIN IMMEDIATE');
   try {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
+    const result = fn(db);
+    db.exec('COMMIT');
+    return result;
   } catch (err) {
-    console.error('Error saving casino.db:', err);
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // rollback error ignored if already aborted
+    }
+    throw err;
   }
 }
 
-function initDatabaseTables(database: Database) {
-  database.run(`
+/**
+ * No-op retained for backwards compatibility.
+ * DatabaseSync writes directly and immediately to casino.db on disk.
+ */
+export function saveDb(): void {
+  // Direct disk SQLite does not need in-memory export/save
+}
+
+function initDatabaseTables(database: DatabaseSync) {
+  database.exec(`
     CREATE TABLE IF NOT EXISTS users (
       user_id INTEGER PRIMARY KEY,
       username TEXT,
@@ -75,6 +89,15 @@ function initDatabaseTables(database: Database) {
       current_multiplier REAL,
       active INTEGER DEFAULT 1,
       timestamp INTEGER,
+      round_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS crash_games (
+      user_id INTEGER PRIMARY KEY,
+      bet_amount REAL,
+      crash_point REAL,
+      start_timestamp INTEGER,
+      active INTEGER DEFAULT 1,
       round_id INTEGER
     );
 
@@ -143,85 +166,82 @@ function initDatabaseTables(database: Database) {
 
   // Default admin and stats if not present
   const adminId = 7505000952;
-  const adminRes = database.exec(`SELECT user_id FROM users WHERE user_id = ${adminId}`);
-  if (!adminRes.length || !adminRes[0].values.length) {
+  const adminRow = database.prepare('SELECT user_id FROM users WHERE user_id = ?').get(adminId);
+  if (!adminRow) {
     const nowStr = new Date().toLocaleDateString('ru-RU');
     const nowTs = Math.floor(Date.now() / 1000);
-    database.run(`
+    database.prepare(`
       INSERT INTO users (user_id, username, balance, registration_date, is_admin, is_banned, reg_timestamp)
-      VALUES (${adminId}, 'winer404', 100.0, '${nowStr}', 1, 0, ${nowTs});
-    `);
+      VALUES (?, 'winer404', 100.0, ?, 1, 0, ?)
+    `).run(adminId, nowStr, nowTs);
   }
 
   const stats = ['total_deposits', 'total_withdrawals', 'total_referral_payouts', 'total_paid_out', 'total_players'];
   for (const s of stats) {
-    database.run(`INSERT OR IGNORE INTO stats (key, value) VALUES ('${s}', 0)`);
+    database.prepare(`INSERT OR IGNORE INTO stats (key, value) VALUES (?, 0)`).run(s);
   }
 }
 
-// User Helpers
-export function getUser(database: Database, userId: number, username: string = '') {
-  const stmt = database.prepare(`SELECT * FROM users WHERE user_id = :userId`);
-  stmt.bind({ ':userId': userId });
-  let user: any = null;
-  if (stmt.step()) {
-    user = stmt.getAsObject();
-  }
-  stmt.free();
+// User Helpers (Reads directly from disk, writes directly to disk)
+export function getUser(database: DatabaseSync, userId: number, username: string = '') {
+  let user = database.prepare('SELECT * FROM users WHERE user_id = ?').get(userId) as any;
 
   if (!user) {
     const nowStr = new Date().toLocaleDateString('ru-RU');
     const nowTs = Math.floor(Date.now() / 1000);
-    database.run(`
+    database.prepare(`
       INSERT INTO users (user_id, username, balance, registration_date, reg_timestamp)
       VALUES (?, ?, 10.0, ?, ?)
-    `, [userId, username || `user_${userId}`, nowStr, nowTs]);
-    database.run(`UPDATE stats SET value = value + 1 WHERE key = 'total_players'`);
-    saveDb();
+    `).run(userId, username || `user_${userId}`, nowStr, nowTs);
 
-    const stmt2 = database.prepare(`SELECT * FROM users WHERE user_id = :userId`);
-    stmt2.bind({ ':userId': userId });
-    if (stmt2.step()) {
-      user = stmt2.getAsObject();
-    }
-    stmt2.free();
+    database.prepare(`UPDATE stats SET value = value + 1 WHERE key = 'total_players'`).run();
+
+    user = database.prepare('SELECT * FROM users WHERE user_id = ?').get(userId) as any;
   } else if (username && user.username !== username) {
-    database.run(`UPDATE users SET username = ? WHERE user_id = ?`, [username, userId]);
+    database.prepare(`UPDATE users SET username = ? WHERE user_id = ?`).run(username, userId);
     user.username = username;
-    saveDb();
   }
 
   return user;
 }
 
-export function updateUserBalance(database: Database, userId: number, amount: number) {
-  database.run(`UPDATE users SET balance = ROUND(balance + ?, 2) WHERE user_id = ?`, [amount, userId]);
-  saveDb();
+/**
+ * Updates user balance immediately on disk.
+ * Uses ROUND(..., 2) to maintain exact monetary precision.
+ */
+export function updateUserBalance(database: DatabaseSync, userId: number, amount: number): void {
+  database.prepare(`UPDATE users SET balance = ROUND(balance + ?, 2) WHERE user_id = ?`).run(amount, userId);
 }
 
-export function updateUserGameStats(database: Database, userId: number, betAmount: number, win: boolean) {
-  database.run(`
+/**
+ * Atomically checks that user has enough balance and deducts it.
+ * Returns true if balance was deducted, false if insufficient funds or user not found.
+ * Protects against race conditions and negative balances.
+ */
+export function deductUserBalanceSafe(database: DatabaseSync, userId: number, amount: number): boolean {
+  const cleanAmount = Math.round(amount * 100) / 100;
+  const res = database.prepare(`
+    UPDATE users 
+    SET balance = ROUND(balance - ?, 2) 
+    WHERE user_id = ? AND balance >= ?
+  `).run(cleanAmount, userId, cleanAmount);
+  return res.changes > 0;
+}
+
+export function updateUserGameStats(database: DatabaseSync, userId: number, betAmount: number, win: boolean): void {
+  database.prepare(`
     UPDATE users SET 
       total_games = total_games + 1, 
       total_bets_amount = ROUND(total_bets_amount + ?, 2),
       total_wins = total_wins + ?
     WHERE user_id = ?
-  `, [betAmount, win ? 1 : 0, userId]);
-  saveDb();
+  `).run(betAmount, win ? 1 : 0, userId);
 }
 
-export function getNextNonce(database: Database, userId: number): number {
-  database.run(`UPDATE users SET provably_fair_nonce = provably_fair_nonce + 1 WHERE user_id = ?`, [userId]);
-  const stmt = database.prepare(`SELECT provably_fair_nonce FROM users WHERE user_id = :userId`);
-  stmt.bind({ ':userId': userId });
-  let nonce = 1;
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    nonce = Number(row.provably_fair_nonce) || 1;
-  }
-  stmt.free();
-  saveDb();
-  return nonce;
+export function getNextNonce(database: DatabaseSync, userId: number): number {
+  database.prepare(`UPDATE users SET provably_fair_nonce = provably_fair_nonce + 1 WHERE user_id = ?`).run(userId);
+  const row = database.prepare('SELECT provably_fair_nonce FROM users WHERE user_id = ?').get(userId) as any;
+  return row ? Number(row.provably_fair_nonce) || 1 : 1;
 }
 
 // Provably Fair Helpers
@@ -232,11 +252,17 @@ export function generateSeeds() {
   return { server_seed, client_seed, server_seed_hash };
 }
 
-export function getMinesPositions(server_seed: string, client_seed: string, nonce: number, field_size: number = 25, mines_count: number = 10): number[] {
+export function getMinesPositions(
+  server_seed: string,
+  client_seed: string,
+  nonce: number,
+  field_size: number = 25,
+  mines_count: number = 10
+): number[] {
   // Deterministic seed generation matching Python's hashlib.sha256(f"{server_seed}:{client_seed}:{nonce}")
   const combined = `${server_seed}:${client_seed}:${nonce}`;
   const hash = crypto.createHash('sha256').update(combined).digest('hex');
-  
+
   // Use pseudo-random number generator seeded with deterministic hash
   // Fisher-Yates shuffle algorithm
   const positions = Array.from({ length: field_size }, (_, i) => i);

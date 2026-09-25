@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Bomb,
-  RotateCw,
+  Gamepad2,
   Trophy,
   Users,
   User,
+  Bomb,
+  RotateCw,
+  Dices,
+  Coins,
 } from 'lucide-react';
 import { Header } from './components/Header.tsx';
 import { MinesGame } from './components/MinesGame.tsx';
 import { RouletteGame } from './components/RouletteGame.tsx';
+import { DiceGame } from './components/DiceGame.tsx';
+import { CoinflipGame } from './components/CoinflipGame.tsx';
 import { WalletModal } from './components/WalletModal.tsx';
 import { LeaderboardTab } from './components/LeaderboardTab.tsx';
 import { ReferralsTab } from './components/ReferralsTab.tsx';
@@ -16,8 +21,43 @@ import { ProfileTab } from './components/ProfileTab.tsx';
 import { ProvablyFairModal } from './components/ProvablyFairModal.tsx';
 import { initTelegramApp, getTelegramUser, triggerHaptic } from './utils/telegram.ts';
 
+type NavigationTab = 'games' | 'leaderboard' | 'referrals' | 'profile';
+type GameType = 'mines' | 'roulette' | 'dice' | 'coinflip';
+
+interface GameItem {
+  id: GameType;
+  title: string;
+  icon: React.ReactNode;
+  badge?: string;
+}
+
+const GAMES: GameItem[] = [
+  { id: 'mines', title: 'Мины', icon: '💣', badge: 'HOT' },
+  { id: 'roulette', title: 'Рулетка', icon: '🎡' },
+  { id: 'dice', title: 'Кубик', icon: '🎲' },
+  {
+    id: 'coinflip',
+    title: 'Монетка',
+    icon: (
+      <svg className="w-4 h-4 text-amber-400" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="9" fill="url(#appCoinGrad)" stroke="#f59e0b" strokeWidth="2" />
+        <circle cx="12" cy="12" r="6.5" stroke="#78350f" strokeWidth="1" strokeDasharray="2 2" />
+        <text x="12" y="15" textAnchor="middle" fill="#78350f" fontSize="8" fontWeight="900" fontFamily="sans-serif">$</text>
+        <defs>
+          <linearGradient id="appCoinGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#fef08a" />
+            <stop offset="0.5" stopColor="#fbbf24" />
+            <stop offset="1" stopColor="#d97706" />
+          </linearGradient>
+        </defs>
+      </svg>
+    ),
+  },
+];
+
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'mines' | 'roulette' | 'leaderboard' | 'referrals' | 'profile'>('mines');
+  const [currentTab, setCurrentTab] = useState<NavigationTab>('games');
+  const [activeGame, setActiveGame] = useState<GameType>('mines');
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -82,22 +122,84 @@ export default function App() {
           </div>
         ) : (
           <>
-            {currentTab === 'mines' && (
-              <MinesGame
-                userId={user?.user_id || 7505000952}
-                balance={Number(user?.balance || 0)}
-                onBalanceChange={handleBalanceChange}
-                onOpenFairness={handleOpenFairness}
-              />
-            )}
+            {currentTab === 'games' && (
+              <div>
+                {/* Modern Responsive Game Switcher (100% visible on all phones) */}
+                <div className="sticky top-0 z-30 bg-[#0d121f]/95 backdrop-blur-md border-b border-slate-800/80 px-2 py-2">
+                  <div className="grid grid-cols-4 gap-1.5 p-1 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-md">
+                    {GAMES.map((game) => {
+                      const isActive = activeGame === game.id;
+                      return (
+                        <button
+                          key={game.id}
+                          onClick={() => {
+                            triggerHaptic('selection');
+                            setActiveGame(game.id);
+                          }}
+                          className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 rounded-xl transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-gradient-to-b from-amber-400 via-amber-500 to-yellow-500 text-slate-950 font-black shadow-md shadow-amber-500/25 ring-1 ring-amber-300'
+                              : 'bg-slate-800/40 hover:bg-slate-800/80 text-slate-300 font-bold border border-slate-700/40'
+                          }`}
+                        >
+                          <span className="text-base sm:text-sm leading-none flex items-center justify-center">{game.icon}</span>
+                          <span className="text-[11px] sm:text-xs leading-none tracking-tight">{game.title}</span>
+                          {game.badge && (
+                            <span
+                              className={`absolute -top-1.5 -right-1 text-[8px] px-1 py-0.2 rounded-full font-black uppercase shadow-sm ${
+                                isActive
+                                  ? 'bg-slate-950 text-amber-300 border border-amber-400/40'
+                                  : 'bg-rose-500 text-white'
+                              }`}
+                            >
+                              {game.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-            {currentTab === 'roulette' && (
-              <RouletteGame
-                userId={user?.user_id || 7505000952}
-                balance={Number(user?.balance || 0)}
-                onBalanceChange={handleBalanceChange}
-                onOpenFairness={handleOpenFairness}
-              />
+                {/* Active Game Component */}
+                <div className="mt-1">
+                  {activeGame === 'mines' && (
+                    <MinesGame
+                      userId={user?.user_id || 7505000952}
+                      balance={Number(user?.balance || 0)}
+                      onBalanceChange={handleBalanceChange}
+                      onOpenFairness={handleOpenFairness}
+                    />
+                  )}
+
+                  {activeGame === 'roulette' && (
+                    <RouletteGame
+                      userId={user?.user_id || 7505000952}
+                      balance={Number(user?.balance || 0)}
+                      onBalanceChange={handleBalanceChange}
+                      onOpenFairness={handleOpenFairness}
+                    />
+                  )}
+
+                  {activeGame === 'dice' && (
+                    <DiceGame
+                      userId={user?.user_id || 7505000952}
+                      balance={Number(user?.balance || 0)}
+                      onBalanceChange={handleBalanceChange}
+                      onOpenFairness={handleOpenFairness}
+                    />
+                  )}
+
+                  {activeGame === 'coinflip' && (
+                    <CoinflipGame
+                      userId={user?.user_id || 7505000952}
+                      balance={Number(user?.balance || 0)}
+                      onBalanceChange={handleBalanceChange}
+                      onOpenFairness={handleOpenFairness}
+                    />
+                  )}
+                </div>
+              </div>
             )}
 
             {currentTab === 'leaderboard' && <LeaderboardTab />}
@@ -121,44 +223,26 @@ export default function App() {
 
       {/* Floating / Bottom Navigation Bar */}
       <nav className="fixed bottom-0 inset-x-0 z-40 bg-[#0d121f]/95 backdrop-blur-lg border-t border-slate-800/80 px-2 py-1.5 safe-area-pb">
-        <div className="max-w-md mx-auto grid grid-cols-5 gap-1">
-          {/* 1. Mines Tab */}
+        <div className="max-w-md mx-auto grid grid-cols-4 gap-1">
+          {/* 1. Games Tab */}
           <button
             onClick={() => {
               triggerHaptic('selection');
-              setCurrentTab('mines');
+              setCurrentTab('games');
             }}
             className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
-              currentTab === 'mines'
+              currentTab === 'games'
                 ? 'text-amber-400 font-black'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className={`p-1 rounded-lg ${currentTab === 'mines' ? 'bg-amber-500/15' : ''}`}>
-              <Bomb size={20} className={currentTab === 'mines' ? 'stroke-[2.5]' : ''} />
+            <div className={`p-1 rounded-lg ${currentTab === 'games' ? 'bg-amber-500/15' : ''}`}>
+              <Gamepad2 size={20} className={currentTab === 'games' ? 'stroke-[2.5]' : ''} />
             </div>
-            <span className="text-[10px] mt-0.5 tracking-tight font-bold">Мины</span>
+            <span className="text-[10px] mt-0.5 tracking-tight font-bold">Игры</span>
           </button>
 
-          {/* 2. Roulette Tab */}
-          <button
-            onClick={() => {
-              triggerHaptic('selection');
-              setCurrentTab('roulette');
-            }}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
-              currentTab === 'roulette'
-                ? 'text-amber-400 font-black'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <div className={`p-1 rounded-lg ${currentTab === 'roulette' ? 'bg-amber-500/15' : ''}`}>
-              <RotateCw size={20} className={currentTab === 'roulette' ? 'stroke-[2.5]' : ''} />
-            </div>
-            <span className="text-[10px] mt-0.5 tracking-tight font-bold">Рулетка</span>
-          </button>
-
-          {/* 3. Leaderboard Tab */}
+          {/* 2. Leaderboard Tab */}
           <button
             onClick={() => {
               triggerHaptic('selection');
@@ -176,7 +260,7 @@ export default function App() {
             <span className="text-[10px] mt-0.5 tracking-tight font-bold">Топ</span>
           </button>
 
-          {/* 4. Referrals Tab */}
+          {/* 3. Referrals Tab */}
           <button
             onClick={() => {
               triggerHaptic('selection');
@@ -194,7 +278,7 @@ export default function App() {
             <span className="text-[10px] mt-0.5 tracking-tight font-bold">Рефералы</span>
           </button>
 
-          {/* 5. Profile Tab */}
+          {/* 4. Profile Tab */}
           <button
             onClick={() => {
               triggerHaptic('selection');

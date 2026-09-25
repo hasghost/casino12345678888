@@ -94,19 +94,29 @@ export function triggerHaptic(type: 'light' | 'medium' | 'heavy' | 'success' | '
 
 export function openExternalUrl(url: string) {
   if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
-    if (url.startsWith('https://t.me/') && typeof window.Telegram.WebApp.openTelegramLink === 'function') {
-      window.Telegram.WebApp.openTelegramLink(url);
-      return;
-    }
-    if (typeof window.Telegram.WebApp.openLink === 'function') {
-      window.Telegram.WebApp.openLink(url);
-      return;
+    try {
+      if (url.startsWith('https://t.me/') && typeof window.Telegram.WebApp.openTelegramLink === 'function') {
+        window.Telegram.WebApp.openTelegramLink(url);
+        return;
+      }
+      if (typeof window.Telegram.WebApp.openLink === 'function') {
+        window.Telegram.WebApp.openLink(url);
+        return;
+      }
+    } catch (e) {
+      console.warn('Error opening link via Telegram WebApp SDK:', e);
     }
   }
   // Safe navigation fallback without window.open
-  const a = document.createElement('a');
-  a.href = url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  a.click();
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch {
+    window.location.href = url;
+  }
 }

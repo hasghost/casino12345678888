@@ -27,7 +27,7 @@ interface ActiveGameState {
   roundId?: number;
 }
 
-const MINES_OPTIONS = [1, 2, 3, 5, 10, 15, 20, 24];
+const MINES_OPTIONS = [5, 7, 10, 12, 15, 18, 20, 24];
 const QUICK_BETS = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0];
 
 export const MinesGame: React.FC<MinesGameProps> = ({
@@ -41,6 +41,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [activeGame, setActiveGame] = useState<ActiveGameState | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [isCashingOut, setIsCashingOut] = useState<boolean>(false);
 
   // Grid results after game finishes
   const [revealedMines, setRevealedMines] = useState<number[] | null>(null);
@@ -203,10 +204,9 @@ export const MinesGame: React.FC<MinesGameProps> = ({
   };
 
   const handleCashout = async () => {
-    if (!isPlaying || loading || !activeGame || activeGame.opened.length === 0) return;
+    if (!isPlaying || loading || isCashingOut || !activeGame || activeGame.opened.length === 0) return;
 
-    playCashoutSound();
-    triggerHaptic('success');
+    setIsCashingOut(true);
     setLoading(true);
     setErrorMsg(null);
 
@@ -220,9 +220,16 @@ export const MinesGame: React.FC<MinesGameProps> = ({
       const data = await res.json();
       if (!data.ok) {
         setErrorMsg(data.error || 'Ошибка при заборе выигрыша');
+        // Synchronize state with database
+        checkActiveGame();
+        fetch(`/api/user?userId=${userId}`).then(r => r.json()).then(u => {
+          if (u.ok && u.user) onBalanceChange(u.user.balance);
+        }).catch(() => {});
         return;
       }
 
+      playCashoutSound();
+      triggerHaptic('success');
       confetti({
         particleCount: 60,
         spread: 60,
@@ -231,14 +238,17 @@ export const MinesGame: React.FC<MinesGameProps> = ({
       });
 
       setIsPlaying(false);
+      setActiveGame(null);
       setRevealedMines(data.mines);
       setLastWinInfo({ amount: data.winAmount, multiplier: data.multiplier });
       onBalanceChange(data.balance);
       setFairnessData(data.fairness);
     } catch (err) {
       setErrorMsg('Ошибка сервера при выводе');
+      checkActiveGame();
     } finally {
       setLoading(false);
+      setIsCashingOut(false);
     }
   };
 
@@ -462,7 +472,7 @@ export const MinesGame: React.FC<MinesGameProps> = ({
         {isPlaying ? (
           <div className="space-y-2">
             <button
-              disabled={loading || openedCount === 0}
+              disabled={loading || isCashingOut || openedCount === 0}
               onClick={handleCashout}
               className={`w-full py-4 px-4 rounded-2xl font-black text-base uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl ${
                 openedCount > 0

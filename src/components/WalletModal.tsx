@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
-  ArrowDownLeft,
-  ArrowUpRight,
   Gift,
   Calendar,
   Copy,
@@ -11,9 +9,14 @@ import {
   ShieldCheck,
   AlertCircle,
   Coins,
+  RefreshCw,
+  Zap,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Bot,
+  Sparkles,
 } from 'lucide-react';
-import { triggerHaptic } from '../utils/telegram.ts';
-import { openExternalUrl } from '../utils/telegram.ts';
+import { triggerHaptic, openExternalUrl } from '../utils/telegram.ts';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -23,6 +26,8 @@ interface WalletModalProps {
   initialTab?: 'deposit' | 'withdraw' | 'promo' | 'bonus';
 }
 
+const DEFAULT_BOT_USERNAME = 'SPIND_BET_BOT';
+
 export const WalletModal: React.FC<WalletModalProps> = ({
   isOpen,
   onClose,
@@ -30,59 +35,123 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onBalanceChange,
   initialTab = 'deposit',
 }) => {
-  const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'promo' | 'bonus'>(initialTab);
+  // Normalize tabs: 'deposit' and 'withdraw' map to 'operations'
+  const getNormalizedTab = (tab: string): 'operations' | 'promo' | 'bonus' => {
+    if (tab === 'promo') return 'promo';
+    if (tab === 'bonus') return 'bonus';
+    return 'operations';
+  };
+
+  const [activeTab, setActiveTab] = useState<'operations' | 'promo' | 'bonus'>(getNormalizedTab(initialTab));
+  const [botUsername, setBotUsername] = useState(DEFAULT_BOT_USERNAME);
+  const [botDepositUrl, setBotDepositUrl] = useState(`https://t.me/${DEFAULT_BOT_USERNAME}?start=deposit`);
+  const [botWithdrawUrl, setBotWithdrawUrl] = useState(`https://t.me/${DEFAULT_BOT_USERNAME}?start=withdraw`);
   const [promoCode, setPromoCode] = useState('');
   const [promoStatus, setPromoStatus] = useState<{ success: boolean; msg: string } | null>(null);
+  const [promoLoading, setPromoLoading] = useState(false);
   const [bonusStatus, setBonusStatus] = useState<{ success: boolean; msg: string } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [bonusLoading, setBonusLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [refreshingBalance, setRefreshingBalance] = useState(false);
 
-  // Deposit state
-  const [depositAmount, setDepositAmount] = useState('1.00');
-  const [depositLoading, setDepositLoading] = useState(false);
-  const [invoiceUrl, setInvoiceUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setActiveTab(getNormalizedTab(initialTab));
+  }, [initialTab, isOpen]);
 
-  // Withdraw state
-  const [withdrawAmount, setWithdrawAmount] = useState('0.50');
-  const [withdrawMsg, setWithdrawMsg] = useState<{ success: boolean; text: string; url?: string } | null>(null);
+  // Fetch bot info from server
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/bot/info')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.ok && data.bot) {
+          if (data.bot.username) setBotUsername(data.bot.username);
+          if (data.bot.depositUrl) setBotDepositUrl(data.bot.depositUrl);
+          if (data.bot.withdrawUrl) setBotWithdrawUrl(data.bot.withdrawUrl);
+        }
+      })
+      .catch(() => {});
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const balance = Number(user?.balance || 0);
+  const rubBalance = Math.round(balance * 90);
   const refBalance = Number(user?.referral_balance || 0);
-  const totalGames = Number(user?.total_games || 0);
-  const totalBets = Number(user?.total_bets_amount || 0);
 
   const handleCopyId = () => {
     triggerHaptic('light');
-    navigator.clipboard.writeText(String(user?.user_id));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (user?.user_id) {
+      navigator.clipboard.writeText(String(user.user_id));
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
+  };
+
+  const handleRefreshBalance = async () => {
+    if (refreshingBalance || !user?.user_id) return;
+    triggerHaptic('light');
+    setRefreshingBalance(true);
+    try {
+      const res = await fetch(`/api/user?userId=${user.user_id}`);
+      const data = await res.json();
+      if (data.ok && data.user) {
+        onBalanceChange(Number(data.user.balance || 0));
+        triggerHaptic('success');
+      }
+    } catch {
+      // ignore
+    } finally {
+      setTimeout(() => setRefreshingBalance(false), 500);
+    }
+  };
+
+  const handleOpenBotDeposit = () => {
+    triggerHaptic('medium');
+    openExternalUrl(botDepositUrl);
+  };
+
+  const handleOpenBotWithdraw = () => {
+    triggerHaptic('light');
+    openExternalUrl(botWithdrawUrl);
   };
 
   const handleActivatePromo = async () => {
-    if (!promoCode.trim()) return;
+    const trimmed = promoCode.trim();
+    if (!trimmed || promoLoading) return;
     triggerHaptic('medium');
+    setPromoLoading(true);
+    setPromoStatus(null);
+
     try {
       const res = await fetch('/api/promo/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.user_id, code: promoCode }),
+        body: JSON.stringify({ userId: user?.user_id, code: trimmed }),
       });
       const data = await res.json();
       if (data.ok) {
         setPromoStatus({ success: true, msg: `Успешно! Начислено $${data.amount.toFixed(2)}` });
         onBalanceChange(data.balance);
         setPromoCode('');
+        triggerHaptic('success');
       } else {
         setPromoStatus({ success: false, msg: data.error || 'Ошибка активации' });
+        triggerHaptic('error');
       }
     } catch {
       setPromoStatus({ success: false, msg: 'Ошибка связи с сервером' });
+    } finally {
+      setPromoLoading(false);
     }
   };
 
   const handleClaimBonus = async () => {
+    if (bonusLoading) return;
     triggerHaptic('medium');
+    setBonusLoading(true);
+    setBonusStatus(null);
+
     try {
       const res = await fetch('/api/bonus/claim', {
         method: 'POST',
@@ -92,447 +161,298 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       const data = await res.json();
       if (data.ok) {
         if (data.won) {
-          setBonusStatus({ success: true, msg: `Поздравляем! Вы выиграли $${data.amount.toFixed(2)} на баланс!` });
+          setBonusStatus({ success: true, msg: `Ура! Вы получили ежедневный бонус +$${data.amount.toFixed(2)}!` });
           onBalanceChange(data.balance);
+          triggerHaptic('success');
         } else {
-          setBonusStatus({ success: false, msg: 'Не повезло! Попробуйте завтра через 24 часа.' });
+          setBonusStatus({ success: false, msg: 'Увы, в этот раз не выпало. Попробуйте снова завтра!' });
+          triggerHaptic('light');
         }
       } else {
-        setBonusStatus({ success: false, msg: data.error || 'Ошибка получения бонуса' });
+        setBonusStatus({ success: false, msg: data.error || 'Бонус пока недоступен' });
+        triggerHaptic('error');
       }
     } catch {
-      setBonusStatus({ success: false, msg: 'Ошибка запроса' });
+      setBonusStatus({ success: false, msg: 'Ошибка соединения с сервером' });
+    } finally {
+      setBonusLoading(false);
     }
   };
 
-  const handleCreateCryptoInvoice = () => {
-    triggerHaptic('medium');
-    setDepositLoading(true);
-    // In production, CryptoBot creates direct invoice. We open bot's deposit or CryptoBot pay link:
-    setTimeout(() => {
-      setDepositLoading(false);
-      const url = `https://t.me/CryptoBot?start=pay_${user?.user_id}`;
-      setInvoiceUrl(url);
-    }, 600);
-  };
-
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 animate-in fade-in duration-200">
-      <div className="bg-[#121826] border border-slate-700/80 rounded-3xl w-full max-w-md p-4 sm:p-5 shadow-2xl relative max-h-[90vh] overflow-y-auto no-scrollbar">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-          <div>
-            <h3 className="text-base font-black text-white flex items-center gap-1.5">
-              <span>Касса & Бонусы</span>
-              <span className="text-amber-400">SpindBet</span>
-            </h3>
-            <p className="text-[11px] text-slate-400">Управление балансом и мгновенные выплаты</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3.5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="bg-[#101524] border border-slate-800 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800/80 bg-slate-900/60">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Coins size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-white leading-tight">Баланс и операции</h3>
+              <p className="text-[10px] text-slate-400">Управление счетом SpindBet</p>
+            </div>
           </div>
           <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition-colors"
+            onClick={() => {
+              triggerHaptic('light');
+              onClose();
+            }}
+            className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
           >
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
-        {/* Balance Card Summary */}
-        <div className="my-3.5 bg-gradient-to-br from-slate-900 to-slate-800/80 border border-slate-700/60 rounded-2xl p-3.5 flex items-center justify-between">
-          <div>
-            <span className="text-[10px] uppercase font-extrabold tracking-wider text-slate-400">Основной баланс</span>
-            <div className="text-2xl font-black text-amber-400 tracking-tight leading-none mt-1">
-              ${balance.toFixed(2)}
+        {/* Balance Card */}
+        <div className="p-4 bg-gradient-to-b from-[#141b2e] to-[#101524] border-b border-slate-800/80 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Текущий баланс</span>
+            <button
+              onClick={handleRefreshBalance}
+              disabled={refreshingBalance}
+              className="text-[11px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={refreshingBalance ? 'animate-spin' : ''} />
+              <span>Обновить</span>
+            </button>
+          </div>
+
+          <div className="flex items-baseline justify-between">
+            <div>
+              <div className="text-3xl font-black text-amber-400 tracking-tight">
+                ${balance.toFixed(2)}
+              </div>
+              <div className="text-xs font-semibold text-slate-400 mt-0.5">
+                ~{rubBalance.toLocaleString('ru-RU')} ₽ (по курсу 1$ = 90₽)
+              </div>
             </div>
-            <div className="text-[11px] font-semibold text-slate-400 mt-1">
-              ~{(balance * 90).toLocaleString('ru-RU')} ₽ (курс 90₽)
+
+            <div className="text-right">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Реф. счет</span>
+              <span className="text-sm font-black text-slate-300">${refBalance.toFixed(2)}</span>
             </div>
           </div>
-          <div className="text-right">
-            <span className="text-[10px] uppercase font-extrabold tracking-wider text-slate-400">Реферальный</span>
-            <div className="text-base font-bold text-slate-200 mt-1">
-              ${refBalance.toFixed(2)}
-            </div>
-            <div className="text-[10px] text-emerald-400 font-semibold mt-1">
-              7% от проигрышей
-            </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[11px]">
+            <span className="text-slate-400">Telegram ID:</span>
+            <button
+              onClick={handleCopyId}
+              className="font-mono text-slate-300 hover:text-amber-400 flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <span>{user?.user_id || '—'}</span>
+              {copiedId ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+            </button>
           </div>
         </div>
 
-        {/* Tab Buttons */}
-        <div className="grid grid-cols-4 gap-1 p-1 bg-slate-900 rounded-xl mb-4 text-xs font-bold">
+        {/* Tab Switcher */}
+        <div className="flex border-b border-slate-800 bg-[#0d121f] p-1.5 gap-1">
           <button
             onClick={() => {
               triggerHaptic('selection');
-              setActiveTab('deposit');
+              setActiveTab('operations');
             }}
-            className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
-              activeTab === 'deposit'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-400 hover:text-white'
+            className={`flex-1 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              activeTab === 'operations'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
-            <ArrowDownLeft size={13} />
-            <span>Ввод</span>
+            <Bot size={14} />
+            <span>Пополнение и вывод</span>
           </button>
-          <button
-            onClick={() => {
-              triggerHaptic('selection');
-              setActiveTab('withdraw');
-            }}
-            className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
-              activeTab === 'withdraw'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <ArrowUpRight size={13} />
-            <span>Вывод</span>
-          </button>
+
           <button
             onClick={() => {
               triggerHaptic('selection');
               setActiveTab('promo');
             }}
-            className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
+            className={`flex-1 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === 'promo'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
-            <Gift size={13} />
-            <span>Промо</span>
+            <Gift size={14} />
+            <span>Промокод</span>
           </button>
+
           <button
             onClick={() => {
               triggerHaptic('selection');
               setActiveTab('bonus');
             }}
-            className={`py-2 rounded-lg transition-colors flex items-center justify-center gap-1 ${
+            className={`flex-1 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               activeTab === 'bonus'
-                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
-            <Calendar size={13} />
+            <Calendar size={14} />
             <span>Бонус</span>
           </button>
         </div>
 
-        {/* TAB 1: DEPOSIT */}
-        {activeTab === 'deposit' && (
-          <div className="space-y-3 animate-in fade-in">
-            {/* Method 1: CryptoBot */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center font-black text-sm">
-                    💎
+        {/* Content Body */}
+        <div className="p-4 overflow-y-auto flex-1 space-y-4">
+          {/* TAB 1: OPERATIONS VIA BOT (REPLACES OLD FORMS) */}
+          {activeTab === 'operations' && (
+            <div className="space-y-4 animate-in fade-in">
+              {/* Bot Info Banner */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/10 via-slate-900 to-emerald-500/10 border border-amber-500/30 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
+                    <ShieldCheck size={22} />
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-white leading-tight">CryptoBot (USDT)</h4>
-                    <span className="text-[10px] text-slate-400">Мгновенно, без комиссии • Мин. $0.05</span>
+                    <h4 className="text-sm font-black text-white leading-tight">
+                      Пополнение и вывод через бота
+                    </h4>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      Баланс пополняется и выводится через официального бота <b className="text-amber-400">@{botUsername}</b>.
+                      Все операции защищены и обрабатываются моментально.
+                    </p>
                   </div>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold border border-emerald-500/30">
-                  Авто
-                </span>
+
+                <div className="pt-2 border-t border-slate-800/60 grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                  <div className="flex items-center gap-1.5">
+                    <Zap size={13} className="text-amber-400 flex-shrink-0" />
+                    <span>Мгновенное зачисление</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck size={13} className="text-emerald-400 flex-shrink-0" />
+                    <span>CryptoBot / СБП / Карты</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="flex gap-2 pt-1">
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.05"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  placeholder="Сумма в USDT"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold focus:outline-none focus:border-amber-500"
-                />
+              {/* Action Buttons */}
+              <div className="space-y-2.5">
+                {/* Main Action: Go to Bot Top-up */}
                 <button
-                  disabled={depositLoading}
-                  onClick={handleCreateCryptoInvoice}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition-colors flex-shrink-0"
+                  onClick={handleOpenBotDeposit}
+                  className="w-full py-3.5 px-4 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-sm uppercase tracking-wider rounded-2xl shadow-xl shadow-amber-500/25 flex items-center justify-center gap-2.5 transition-all cursor-pointer"
                 >
-                  {depositLoading ? 'Создание...' : 'Оплатить'}
+                  <ArrowDownLeft size={20} className="stroke-[2.5]" />
+                  <span>Перейти в бота (Пополнить баланс)</span>
+                  <ExternalLink size={16} />
+                </button>
+
+                {/* Secondary Action: Go to Bot Withdrawal */}
+                <button
+                  onClick={handleOpenBotWithdraw}
+                  className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 active:scale-[0.99] text-slate-200 hover:text-white font-bold text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <ArrowUpRight size={16} className="text-amber-400" />
+                  <span>Вывести средства через бота</span>
+                  <ExternalLink size={14} className="text-slate-400" />
                 </button>
               </div>
 
-              {invoiceUrl && (
-                <div className="p-2.5 bg-blue-500/10 border border-blue-500/30 rounded-xl text-xs flex items-center justify-between">
-                  <span className="text-blue-300">Счет готов к оплате в боте</span>
-                  <button
-                    onClick={() => openExternalUrl('https://t.me/SPIND_BET_BOT')}
-                    className="text-xs font-bold text-amber-400 hover:underline flex items-center gap-1"
-                  >
-                    <span>Открыть в боте</span>
-                    <ExternalLink size={12} />
-                  </button>
+              {/* Real-time synchronization note */}
+              <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800/80 text-[11px] text-slate-400 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-slate-300 font-bold">
+                  <Sparkles size={13} className="text-amber-400" />
+                  <span>Синхронизация баланса:</span>
                 </div>
-              )}
-            </div>
-
-            {/* Method 2: Telegram Stars */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-black text-sm">
-                    ⭐
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-white leading-tight">Telegram Stars</h4>
-                    <span className="text-[10px] text-slate-400">10 Stars ≈ 0.09 USDT • Мин. 10 ⭐</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => openExternalUrl('https://t.me/SPIND_BET_BOT')}
-                  className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-colors"
-                >
-                  Купить в боте
-                </button>
+                <p>
+                  После пополнения или вывода в боте ваш баланс в мини-аппе обновляется сразу. Если мини-апп уже открыт, нажмите кнопку <b>«Обновить»</b> выше.
+                </p>
               </div>
             </div>
+          )}
 
-            {/* Method 3: NFT Gifts */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center font-black text-sm">
-                    🎁
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-white leading-tight">NFT Подарки</h4>
-                    <span className="text-[10px] text-slate-400">Отправьте подарок @winer404 с вашим ID</span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800 text-xs">
-                <span className="text-slate-400">
-                  Ваш ID: <b className="text-white font-mono">{user?.user_id}</b>
-                </span>
-                <button
-                  onClick={handleCopyId}
-                  className="flex items-center gap-1 text-amber-400 hover:text-amber-300 font-bold"
-                >
-                  {copied ? <Check size={13} /> : <Copy size={13} />}
-                  <span>{copied ? 'Скопировано!' : 'Копировать'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Method 4: SBP */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black text-sm">
-                  💳
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-white leading-tight">СБП (Карты РФ)</h4>
-                  <span className="text-[10px] text-slate-400">Через администратора @winer404</span>
-                </div>
-              </div>
-              <button
-                onClick={() => openExternalUrl('https://t.me/winer404')}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs transition-colors border border-slate-700"
-              >
-                Написать
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 2: WITHDRAW */}
-        {activeTab === 'withdraw' && (
-          <div className="space-y-3.5 animate-in fade-in">
-            {/* Turn & Games condition info */}
-            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs space-y-1">
-              <div className="flex items-center gap-1.5 font-bold text-amber-400">
-                <ShieldCheck size={15} />
-                <span>Условия вывода (согласно боту)</span>
-              </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
-                • Минимум сыграно ставок: <b className="text-white">{totalGames}/2</b>
-                <br />• Минимальный вывод: <b className="text-white">$0.20</b>
+          {/* TAB 2: PROMOCODE */}
+          {activeTab === 'promo' && (
+            <div className="space-y-3.5 animate-in fade-in">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Введите промокод от администрации или партнеров для мгновенного зачисления бонусного баланса:
               </p>
-            </div>
 
-            {/* CryptoBot Check Withdrawal */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-              <h4 className="text-xs font-bold text-white flex items-center justify-between">
-                <span>Вывод через CryptoBot чек</span>
-                <span className="text-[10px] text-emerald-400 font-semibold">Мгновенно</span>
-              </h4>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.2"
-                  max={balance}
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)}
-                  placeholder="Сумма ($)"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold focus:outline-none focus:border-amber-500"
-                />
-                <button
-                  onClick={() => {
-                    const amt = Number(withdrawAmount);
-                    if (totalGames < 2) {
-                      setWithdrawMsg({
-                        success: false,
-                        text: `Требуется минимум 2 сыгранные ставки перед выводом! (У вас: ${totalGames})`,
-                      });
-                      return;
-                    }
-                    if (amt < 0.2) {
-                      setWithdrawMsg({ success: false, text: 'Минимальный вывод: $0.20' });
-                      return;
-                    }
-                    if (amt > balance) {
-                      setWithdrawMsg({ success: false, text: 'Недостаточно средств на балансе!' });
-                      return;
-                    }
-
-                    // Success - deduct balance and show receipt
-                    onBalanceChange(balance - amt);
-                    const mockCheckUrl = `https://t.me/CryptoBot?start=check_${Math.random().toString(36).substring(7)}`;
-                    setWithdrawMsg({
-                      success: true,
-                      text: `Вывод $${amt.toFixed(2)} успешно сформирован! Чек готов к получению.`,
-                      url: mockCheckUrl,
-                    });
-                  }}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition-colors flex-shrink-0"
-                >
-                  Вывести
-                </button>
-              </div>
-
-              {withdrawMsg && (
-                <div
-                  className={`p-2.5 rounded-xl text-xs ${
-                    withdrawMsg.success
-                      ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
-                      : 'bg-red-500/15 border border-red-500/40 text-red-300'
-                  }`}
-                >
-                  <div>{withdrawMsg.text}</div>
-                  {withdrawMsg.url && (
-                    <button
-                      onClick={() => openExternalUrl(withdrawMsg.url!)}
-                      className="mt-2 w-full py-1.5 bg-emerald-500 text-slate-950 font-bold rounded-lg text-center flex items-center justify-center gap-1"
-                    >
-                      <span>Забрать чек в Telegram</span>
-                      <ExternalLink size={12} />
-                    </button>
-                  )}
+              <div className="space-y-2">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={promoCode}
+                    onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                    placeholder="SPIND2026"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-mono text-white placeholder-slate-600 focus:outline-none focus:border-amber-400 transition-colors uppercase"
+                  />
                 </div>
-              )}
-            </div>
 
-            {/* SBP Withdrawal */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-white">Вывод на СБП (Рубли)</h4>
-                  <span className="text-[10px] text-slate-400">
-                    Требуется оборот ставок: <b className="text-white">${totalBets.toFixed(2)} / $10.00</b>
-                  </span>
-                </div>
-                {totalBets >= 10.0 ? (
-                  <button
-                    onClick={() => openExternalUrl('https://t.me/winer404')}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs transition-colors"
-                  >
-                    Запросить
-                  </button>
-                ) : (
-                  <span className="text-[10px] text-red-400 font-bold bg-red-500/10 px-2 py-1 rounded-lg">
-                    Недоступно
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: PROMO CODE */}
-        {activeTab === 'promo' && (
-          <div className="space-y-3.5 animate-in fade-in">
-            <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-2xl space-y-2">
-              <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Gift size={14} className="text-amber-400" />
-                <span>Активация промокода</span>
-              </h4>
-              <p className="text-[11px] text-slate-400">
-                Введите секретный промокод из нашего официального канала или розыгрыша:
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={promoCode}
-                  onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-                  placeholder="SPIND2026..."
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono uppercase text-white font-bold focus:outline-none focus:border-amber-500"
-                />
                 <button
                   onClick={handleActivatePromo}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition-colors flex-shrink-0"
+                  disabled={promoLoading || !promoCode.trim()}
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  Применить
+                  {promoLoading ? (
+                    <RefreshCw size={14} className="animate-spin" />
+                  ) : (
+                    <Check size={14} className="stroke-[3]" />
+                  )}
+                  <span>Активировать промокод</span>
                 </button>
               </div>
 
               {promoStatus && (
                 <div
-                  className={`p-2 rounded-xl text-xs font-semibold ${
+                  className={`p-3 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
                     promoStatus.success
-                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                      : 'bg-red-500/15 text-red-300 border border-red-500/30'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-red-500/10 border-red-500/30 text-red-400'
                   }`}
                 >
-                  {promoStatus.msg}
+                  {promoStatus.success ? <Check size={14} /> : <AlertCircle size={14} />}
+                  <span>{promoStatus.msg}</span>
                 </div>
               )}
             </div>
+          )}
 
-            <div className="p-3 bg-slate-900/50 border border-slate-800 rounded-2xl text-[11px] text-slate-400">
-              💡 Промокоды регулярно публикуются в Telegram канале новостей казино.
-            </div>
-          </div>
-        )}
-
-        {/* TAB 4: DAILY BONUS */}
-        {activeTab === 'bonus' && (
-          <div className="space-y-3.5 animate-in fade-in text-center p-3">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-600 flex items-center justify-center text-3xl mx-auto shadow-xl shadow-amber-500/20">
-              🎁
-            </div>
-            <div>
-              <h4 className="text-sm font-black text-white">Ежедневный бонус SpindBet</h4>
-              <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
-                Получайте бонус 1 раз в 24 часа. Шанс 50% выиграть $0.01 прямо на основной баланс!
-              </p>
-            </div>
-
-            <button
-              onClick={handleClaimBonus}
-              className="w-full py-3 bg-gradient-to-r from-amber-500 to-yellow-400 hover:brightness-110 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/20"
-            >
-              Крутить колесо удачи
-            </button>
-
-            {bonusStatus && (
-              <div
-                className={`p-3 rounded-2xl text-xs font-semibold ${
-                  bonusStatus.success
-                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                    : 'bg-red-500/15 text-red-300 border border-red-500/30'
-                }`}
-              >
-                {bonusStatus.msg}
+          {/* TAB 3: DAILY BONUS */}
+          {activeTab === 'bonus' && (
+            <div className="space-y-3.5 animate-in fade-in text-center">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 mx-auto">
+                <Gift size={28} />
               </div>
-            )}
-          </div>
-        )}
+
+              <div>
+                <h4 className="text-sm font-black text-white">Ежедневный бонус</h4>
+                <p className="text-xs text-slate-400 mt-1">
+                  Забирайте бесплатный бонус раз в 24 часа!
+                </p>
+              </div>
+
+              <button
+                onClick={handleClaimBonus}
+                disabled={bonusLoading}
+                className="w-full py-3 bg-gradient-to-r from-amber-500 to-yellow-500 hover:brightness-110 disabled:opacity-50 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-amber-500/20"
+              >
+                {bonusLoading ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <Sparkles size={14} />
+                )}
+                <span>Получить бонус</span>
+              </button>
+
+              {bonusStatus && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 text-left ${
+                    bonusStatus.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-slate-800 border-slate-700 text-slate-300'
+                  }`}
+                >
+                  <AlertCircle size={14} className="flex-shrink-0" />
+                  <span>{bonusStatus.msg}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
